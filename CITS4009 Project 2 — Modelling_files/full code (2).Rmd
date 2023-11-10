@@ -1,0 +1,406 @@
+---
+title: "CITS4009 Project 2 — Modelling"
+output: html_document
+date: "2023-10-17"
+---
+
+## Introduction
+
+The data provided in the "data.csv" file appears to be related to popular YouTube channels. It includes information such as the channel name, number of subscribers, video views, category, and various statistics related to these channels. This data can be used for analysis, insights, and comparisons of different YouTube channels' performance.
+
+
+
+```{r}
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(ggthemes)
+library(numform)
+library(timeDate)
+library(lubridate)
+library(reshape2)
+library(ca)
+library(tidyr)
+library(ape)
+library(knitr)
+library(ROCR)
+library(rpart)
+library(grid)
+library(gridExtra)
+library(tidyverse)
+library(data.table)
+library(xgboost)
+library(vtreat)
+```
+
+
+Setting up a plotting theme so that all charts look coherent
+```{r}
+cits4009_theme <- theme_few() + # Theme based on S. Few's "Practical Rules for Using Color in Charts"
+                  theme(plot.title = element_text(color = "darkred")) +
+                  theme(strip.text.x = element_text(size = 14, colour = "#202020")) +
+                  theme(plot.margin=margin(10,30,10,30))
+
+cits4009_map_theme <- cits4009_theme + 
+                      theme(panel.grid = element_blank(),
+                            panel.border = element_blank(),
+                            legend.position="top", legend.direction = 'horizontal',
+                            axis.title.x=element_blank(),
+                            axis.text.x=element_blank(),
+                            axis.ticks.x=element_blank(),
+                            axis.title.y=element_blank(),
+                            axis.text.y=element_blank(),
+                            axis.ticks.y=element_blank())
+
+cits4009_radar_theme <- theme(plot.title = element_text(color = "darkred", size = 14, hjust = 0.5)) +
+                  theme(strip.text.x = element_text(size = 12, colour = "#202020")) +
+                  theme(plot.margin=margin(1,1,1,1))
+```
+
+```{r}
+data <- read.csv('data.csv')
+head(data)
+```
+## Part 1 - Classification
+### Choose the response (target) variable
+
+The chosen response variable, or dependent variable, in this analysis is "subscribers." We've selected this variable because it represents a key measure of a YouTube channel's popularity and reach. By using the number of subscribers as the response variable, we aim to understand and predict how various factors, such as video views, category, and country, influence a channel's subscriber count. This choice allows us to explore the factors contributing to a channel's success and popularity within the YouTube platform.
+
+```{r}
+# Load the required library (if not already loaded)
+# install.packages("dplyr")
+library(dplyr)
+
+# Remove rows with missing values
+cleaned_data <- data %>% na.omit()
+
+# Create a dataset (replace 'your_dataset_name' with your desired dataset name)
+data <- as.data.frame(cleaned_data)
+data
+
+# Now, you have your dataset without missing values, stored as 'your_dataset_name'.
+
+```
+Looking at the proportions of outcome variables selected, we can see that there isn’t an equal split, however, the values are fairly close so it should affect the models substantially.
+
+```{r}
+round(prop.table(table(data$subscribers)), 2)
+```
+### Selecting variables
+Creating a selection of “subscribers” columns as predictors and the target column. We want to look at a variety of variables that could identify if any has been affected by the event. 
+so lets look at another variable also.
+
+```{r}
+# Select the response variable (replace 'your_response_variable' with the actual variable name)
+Y <- data$subscribers
+```
+
+```{r}
+# Identify numerical columns (assuming you want to exclude 'character' and 'factor' columns)
+numerical_columns <- data %>% select_if(is.numeric)
+numerical_columns 
+
+```
+
+```{r}
+# Generate summary statistics for the entire dataset
+summary(data)
+
+```
+### Checking the subscribers
+
+
+```{r}
+# Check summary statistics for the "subscribers" variable in the "data" dataset
+summary(data$subscribers)
+
+```
+
+### Splitting the data
+
+To split your dataset into training, calibration, and test sets, you can use R's sample() function or any related functions. The specific way you split the data depends on the proportions you want for each set.
+
+```{r}
+# Set a random seed for reproducibility
+set.seed(123)
+
+# Define the proportions for each set (adjust as needed)
+train_proportion <- 0.6   # 60% for training
+calibration_proportion <- 0.2   # 20% for calibration
+test_proportion <- 0.2   # 20% for testing
+
+# Calculate the number of rows for each set
+num_rows <- nrow(data)
+num_train <- round(train_proportion * num_rows)
+num_calibration <- round(calibration_proportion * num_rows)
+num_test <- num_rows - num_train - num_calibration
+
+# Create the indices for the sets
+train_indices <- sample(1:num_rows, num_train, replace = FALSE)
+remaining_data <- data[-train_indices, ]
+
+calibration_indices <- sample(1:(num_rows - num_train), num_calibration, replace = FALSE)
+test_indices <- setdiff(1:(num_rows - num_train), calibration_indices)
+
+# Create the sets
+train_set <- data[train_indices, ]
+calibration_set <- remaining_data[calibration_indices, ]
+test_set <- remaining_data[test_indices, ]
+
+```
+```{r}
+# Create a list of your data sets
+splits <- list(train_set, calibration_set, test_set)
+
+# Apply the nrow function to each element in the list
+lapply(splits, nrow)
+
+# This will give you a list of row counts for each data set
+
+```
+To split your data into categorical and numerical variables, you can loop through the columns in your dataset and check their data types.
+
+```{r}
+# Assuming 'data' is your dataset
+
+# Initialize empty lists for categorical and numerical variables
+categorical_vars <- character(0)
+numerical_vars <- character(0)
+
+# Loop through columns
+for (col in names(data)) {
+  if (is.factor(data[[col]]) || is.character(data[[col]])) {
+    # If the column is a factor or character, consider it categorical
+    categorical_vars <- c(categorical_vars, col)
+  } else if (is.numeric(data[[col]])) {
+    # If the column is numeric, consider it numerical
+    numerical_vars <- c(numerical_vars, col)
+  }
+}
+
+# Now, 'categorical_vars' and 'numerical_vars' contain the names of categorical and numerical variables, respectively.
+
+```
+```{r}
+ numerical_vars
+```
+```{r}
+categorical_vars
+```
+
+Here is a function that is used for Single variable predictions for categorical variables.
+
+```{r}
+# Function for single variable predictions for categorical variables
+target_var = Y
+single_variable_predictions <- function(data, categorical_var, target_var) {
+  # Check if the specified variables exist in the dataset
+  if (!(categorical_var %in% names(data)) || !(target_var %in% names(data))) {
+    stop("Specified variables not found in the dataset.")
+  }
+  
+  # Create a summary table of target variable values based on categorical variable
+  summary_table <- table(data[[categorical_var]], data[[target_var]])
+  
+  return(summary_table)
+}
+Y = target_var 
+
+```
+
+```{r}
+# Assuming you have already split your data into categorical and numerical variables
+
+# Load the ggplot2 library
+# install.packages("ggplot2")
+library(ggplot2)
+
+# Create a data frame for visualization
+variable_counts <- data.frame(
+  Category = c("Categorical", "Numerical"),
+  Count = c(length(categorical_vars), length(numerical_vars))
+)
+
+# Create a bar plot
+ggplot(variable_counts, aes(x = Category, y = Count, fill = Category)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Distribution of Categorical and Numerical Variables")
+
+# Alternatively, create a pie chart
+# ggplot(variable_counts, aes(x = "", y = Count, fill = Category)) +
+#   geom_bar(stat = "identity", width = 1) +
+#   coord_polar(theta = "y") +
+#   labs(title = "Distribution of Categorical and Numerical Variables")
+
+```
+### Evaluation of Models
+
+```{r}
+evaluate_models <- function(models, train_set, test_set) {
+  # Initialize lists to store results for each model
+  roc_curves <- list()
+  prediction_distributions <- list()
+  precision_recall_curves <- list()
+  confusion_matrices <- list()
+  null_model_log_likelihoods <- numeric(length(models))
+
+  # Loop through each model
+  for (i in 1:length(models)) {
+    # Fit the model on the training set
+    fitted_model <- fit_model(models[[i]], train_set)
+    
+    # Make predictions on the test set
+    predictions <- predict(fitted_model, test_set)
+    
+    # Calculate ROC curve
+    roc <- calculate_roc(predictions, test_set$actual_outcomes)
+    roc_curves[[i]] <- roc
+    
+    # Calculate prediction distribution plot
+    prediction_dist <- plot_prediction_distribution(predictions)
+    prediction_distributions[[i]] <- prediction_dist
+    
+    # Calculate precision/recall curve
+    precision_recall <- calculate_precision_recall(predictions, test_set$actual_outcomes)
+    precision_recall_curves[[i]] <- precision_recall
+    
+    # Calculate confusion matrix
+    confusion_matrix <- create_confusion_matrix(predictions, test_set$actual_outcomes)
+    confusion_matrices[[i]] <- confusion_matrix
+    
+    # Calculate null model log likelihood
+    null_model_log_likelihood <- calculate_null_model_log_likelihood(test_set$actual_outcomes)
+    null_model_log_likelihoods[i] <- null_model_log_likelihood
+  }
+
+  # Return the results for all models
+  return(list(
+    roc_curves = roc_curves,
+    prediction_distributions = prediction_distributions,
+    precision_recall_curves = precision_recall_curves,
+    confusion_matrices = confusion_matrices,
+    null_model_log_likelihoods = null_model_log_likelihoods
+  ))
+}
+
+```
+
+
+## Multivariate models
+
+### Decision Tree with all variables
+
+
+```{r}
+# Load necessary libraries
+library(caret)
+
+# Create a binary target variable for classification based on 'subscribers'
+data$high_subscribers <- ifelse(data$subscribers > 100000, "High", "Low")
+
+# Split the data into training and test sets
+set.seed(123)  # For reproducibility
+train_index <- createDataPartition(data$high_subscribers, p = 0.8, list = FALSE)
+train_data <- data[train_index, ]
+test_data <- data[-train_index, ]
+
+
+```
+
+```{r}
+train_data
+```
+```{r}
+
+data$Y <- as.factor(data$Y)
+
+# Decision tree with party
+library(party)
+mytree <- ctree(Y~ video.views + uploads +lowest_monthly_earnings+video_views_for_the_last_30_days+video_views_rank+country_rank ,data, controls=ctree_control(mincriterion=0.9, minsplit=50))
+plot(mytree,type="simple")
+
+# Misclassification error
+tab <- table(predict(mytree), data$Y)
+1-sum(diag(tab))/sum(tab)
+
+```
+
+
+### logistic regression model 
+To switch from a Decision Tree classifier to a Logistic Regression classifier, 
+
+```{r}
+# Load necessary libraries
+data=read.csv('data.csv')
+Y=data$subscribers
+library(caret)
+library(glm2)
+
+# Prepare your data
+data$target <- ifelse(data$Y > 1000000, 1, 0)  # Define a binary target variable based on some threshold
+# Check for missing values in the 'target' and 'subscribers' columns
+any(is.na(data$target))
+any(is.na(data$subscribers))
+
+# If there are missing values, you may need to handle them.
+# For example, you can remove rows with missing values:
+data <- na.omit(data)
+
+# Now, split the data into training and test sets
+set.seed(123)  # For reproducibility
+train_index <- createDataPartition(data$target, p = 0.8, list = FALSE)
+train_data <- data[train_index, ]
+test_data <- data[-train_index, ]
+
+# Ensure consistent levels for the target variable in both datasets
+train_data$target <- factor(train_data$target, levels = c(0, 1))
+test_data$target <- factor(test_data$target, levels = c(0, 1))
+
+# Train a logistic regression model
+logistic_model <- train(target ~ subscribers, data = train_data, method = "glm", family = "binomial")
+
+print(logistic_model)
+
+# Interpret and explain the logistic regression model
+# Analyze the impact of "subscribers" on the binary target
+
+
+```
+
+
+### k means clustering
+
+Select relevant features, standardize data, choose appropriate distance metric, find optimal clusters using methods like Elbow, apply k-means, visualize results, analyze cluster patterns, and report findings.
+
+```{r}
+# Load necessary libraries
+library(stats)
+data=read.csv('data.csv')
+
+# Standardize or normalize your feature variables
+standardized_data <- scale(data$subscribers)
+
+# Determine the number of clusters (k)
+# Use the Elbow Method, Silhouette Score, or other techniques to find the optimal k
+
+# Apply k-means clustering
+k <- 3  # Replace with your chosen k value
+cluster_model <- kmeans(standardized_data, centers = k)
+
+# Visualize the clustering results
+plot(standardized_data, col = cluster_model$cluster)
+
+# Interpret and explain the clusters
+# Analyze cluster characteristics and patterns
+
+```
+
+
+
+
+
+
+
+
+
+

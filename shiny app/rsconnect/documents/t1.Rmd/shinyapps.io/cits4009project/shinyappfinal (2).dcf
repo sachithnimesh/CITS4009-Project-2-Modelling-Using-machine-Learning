@@ -1,0 +1,12 @@
+name: shinyappfinal
+title: shinyappfinal
+username: cits4009project
+account: cits4009project
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 10224594
+bundleId: 7816065
+url: https://cits4009project.shinyapps.io/shinyappfinal/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
